@@ -2,6 +2,7 @@ import { ObservableObject } from './ObservableObject';
 import { CHANNELS, SAMPLE_RATE, SensorSimulator } from '../model/SensorSimulator';
 import { RingBuffer } from '../model/RingBuffer';
 import { RmsEnvelope } from '../model/RmsEnvelope';
+import { MedianFrequencyAnalyzer } from '../model/Spectrum';
 import type { ChannelConfig, SensorStatus } from '../model/types';
 
 const TICK_MS = 20; // process a new block of samples 50× per second
@@ -14,8 +15,27 @@ const CONTRACT_SECONDS = 3;
 const COMPLETE_SECONDS = 2;
 const EXPORT_DECIMATION = 20; // 2000 Hz → 100 Hz in the CSV
 const MAX_EXPORT_ROWS = 100 * 60 * 30; // 30 minutes
+const FATIGUE_CHANNEL = 0; // biceps, the prime mover in a curl
+const FATIGUE_WINDOW_SAMPLES = SAMPLE_RATE; // analyze the latest 1 s of raw signal…
+const FATIGUE_INTERVAL_SAMPLES = SAMPLE_RATE; // …once per second, not every sample
+const FATIGUE_HISTORY_POINTS = 300; // 5 minutes of trend
+const FATIGUE_BASELINE_POINTS = 5; // the first 5 s set this session's "fresh" level
+const FATIGUE_SMOOTHING_POINTS = 5; // a single 1 s estimate is noisy; status uses a 5 s average
+const TIRING_DROP = 0.1; // 10% below baseline
+const FATIGUED_DROP = 0.2; // 20% below baseline
 
 export type CalibrationPhase = 'none' | 'relax' | 'contract' | 'complete';
+export type FatigueStatus = 'waiting' | 'fresh' | 'tiring' | 'fatigued';
+
+export interface FatigueState {
+  muscle: string;
+  color: string;
+  medianHz: number | null; // latest 1 s estimate
+  baselineHz: number | null; // null until enough data is in
+  changePercent: number | null; // smoothed change from baseline, negative = lower
+  status: FatigueStatus;
+  history: readonly number[]; // one point per second, oldest first
+}
 
 export interface ChannelViewState extends ChannelConfig {
   visible: boolean;
@@ -35,6 +55,7 @@ export interface DashboardState {
   isCalibrated: boolean;
   hasData: boolean;
   channels: ChannelViewState[];
+  fatigue: FatigueState;
 }
 
 interface ChannelPipeline {
@@ -67,6 +88,12 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
   private repArmed = true;
   private calibration = { phase: 'none' as CalibrationPhase, samplesLeft: 0 };
   private recording: number[][] = [];
+  private spectrum = new MedianFrequencyAnalyzer(FATIGUE_WINDOW_SAMPLES, SAMPLE_RATE);
+  private spectrumInput = new Float32Array(FATIGUE_WINDOW_SAMPLES);
+  private samplesSinceFatigue = 0;
+  // Replaced (never mutated) on each new point so snapshots stay immutable
+  private fatigueHistory: readonly number[] = [];
+  private fatigueBaseline: number | null = null;
 
   constructor() {
     super();
@@ -102,6 +129,10 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
     this.repCount = 0;
     this.repArmed = true;
     this.recording = [];
+    this.samplesSinceFatigue = 0;
+    this.fatigueHistory = [];
+    this.fatigueBaseline = null;
+    this.simulator.resetFatigue();
     this.emit();
   };
 
@@ -168,6 +199,7 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
 
     this.advanceCalibration();
     if (tracking) this.detectReps();
+    this.updateFatigue(tracking);
 
     this.tickCount++;
     if (this.tickCount % PUBLISH_EVERY_TICKS === 0) this.emit();
@@ -213,6 +245,51 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
     }
   }
 
+  /**
+   * Once per second, takes the median frequency of the latest 1 s of raw biceps
+   * signal. Skipped during calibration, where the forced rest/max phases would
+   * distort the trend.
+   */
+  private updateFatigue(tracking: boolean): void {
+    this.samplesSinceFatigue += SAMPLES_PER_TICK;
+    if (this.samplesSinceFatigue < FATIGUE_INTERVAL_SAMPLES) return;
+    this.samplesSinceFatigue = 0;
+
+    const raw = this.pipelines[FATIGUE_CHANNEL].raw;
+    if (!tracking || raw.length < FATIGUE_WINDOW_SAMPLES) return;
+
+    const offset = raw.length - FATIGUE_WINDOW_SAMPLES;
+    for (let i = 0; i < FATIGUE_WINDOW_SAMPLES; i++) this.spectrumInput[i] = raw.at(offset + i);
+    const medianHz = this.spectrum.analyze(this.spectrumInput);
+    if (medianHz === null) return;
+
+    this.fatigueHistory = [...this.fatigueHistory, medianHz].slice(-FATIGUE_HISTORY_POINTS);
+    if (this.fatigueBaseline === null && this.fatigueHistory.length >= FATIGUE_BASELINE_POINTS) {
+      this.fatigueBaseline = average(this.fatigueHistory.slice(0, FATIGUE_BASELINE_POINTS));
+    }
+  }
+
+  private fatigueState(): FatigueState {
+    const history = this.fatigueHistory;
+    const baseline = this.fatigueBaseline;
+    let changePercent: number | null = null;
+    let status: FatigueStatus = 'waiting';
+    if (baseline !== null) {
+      const change = average(history.slice(-FATIGUE_SMOOTHING_POINTS)) / baseline - 1;
+      changePercent = change * 100;
+      status = change <= -FATIGUED_DROP ? 'fatigued' : change <= -TIRING_DROP ? 'tiring' : 'fresh';
+    }
+    return {
+      muscle: CHANNELS[FATIGUE_CHANNEL].muscle,
+      color: CHANNELS[FATIGUE_CHANNEL].color,
+      medianHz: history.length > 0 ? history[history.length - 1] : null,
+      baselineHz: baseline,
+      changePercent,
+      status,
+      history,
+    };
+  }
+
   private emit(): void {
     const channels: ChannelViewState[] = CHANNELS.map((cfg, c) => {
       const p = this.pipelines[c];
@@ -239,6 +316,11 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
       isCalibrated: this.pipelines.every((p) => p.mvc !== null),
       hasData: this.sessionSamples > 0,
       channels,
+      fatigue: this.fatigueState(),
     });
   }
+}
+
+function average(values: readonly number[]): number {
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
 }

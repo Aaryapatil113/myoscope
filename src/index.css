@@ -91,12 +91,13 @@ button, select, input { font: inherit; color: inherit; }
   padding: 20px 24px 24px;
 }
 
+.sidebar { display: flex; flex-direction: column; gap: 12px; align-self: start; min-width: 0; }
+
 .sensors {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: 16px;
-  align-self: start;
 }
 .sensors h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
 .sensors ul { list-style: none; margin: 0; padding: 0; }
@@ -124,6 +125,32 @@ button, select, input { font: inherit; color: inherit; }
 .battery.low .battery-fill { background: var(--danger); }
 .battery-pct { color: var(--muted); width: 30px; text-align: right; }
 .sensor-state { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+
+/* ── Fatigue panel ─────────────────────────────────── */
+.fatigue {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 16px;
+}
+.fatigue-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.fatigue-head h2 { font-size: 15px; font-weight: 600; }
+.fatigue-head span { font-size: 12px; color: var(--muted); }
+.fatigue-readout { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fatigue-value { font-size: 28px; font-weight: 500; line-height: 1.1; }
+.fatigue-value span { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 4px; }
+.fatigue-status { padding: 1px 8px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; }
+.fatigue-status.waiting { background: var(--paper); color: var(--muted); }
+.fatigue-status.fresh { background: #e5f4ef; color: var(--ok); }
+.fatigue-status.tiring { background: #fff3dc; color: var(--warn); }
+.fatigue-status.fatigued { background: #fde8ec; color: var(--danger); }
+.fatigue-trend {
+  display: block; width: 100%; height: 56px; margin: 10px 0 8px;
+  background: #fbfcfd; border-radius: var(--radius-sm);
+}
+.fatigue-baseline { stroke: var(--muted); stroke-dasharray: 3 3; stroke-width: 1; opacity: 0.6; vector-effect: non-scaling-stroke; }
+.fatigue-note { font-size: 13px; color: var(--muted); }
+.fatigue-meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
 
 /* ── Channel strips ────────────────────────────────── */
 .traces { display: flex; flex-direction: column; gap: 12px; min-width: 0; }

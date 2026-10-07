@@ -30,12 +30,23 @@ canvas for performance. Plain CSS in `src/index.css` with tokens in `:root`.
   Canvas reads ViewModel buffers directly via `getTrace()` on requestAnimationFrame.
   Snapshot publishing stays throttled (currently 10×/s).
 
-## Current state (Day 1 complete)
+## Current state (Day 1 complete, Day 2 item 1 done)
 - 4 simulated EMG channels at 2,000 Hz performing bicep curls
 - Moving RMS envelope (100 ms window), live scrolling traces with min/max decimation
 - Calibration flow (relax → max contraction → normalize to % of max)
 - Rep counting with hysteresis, peak tracking, sensor battery/signal-quality panel
 - Channel show/hide, adjustable time window, CSV export of envelopes at 100 Hz
+- Fatigue indicator (biceps): `src/model/Spectrum.ts` has a hand-written radix-2 FFT and
+  `MedianFrequencyAnalyzer` (Hann window, 20–450 Hz band). The ViewModel analyzes the
+  latest 1 s of raw signal once per second (skipped during calibration). The first 5
+  points set the baseline. Status uses a 5-point average: Fresh, then Tiring at 10% below
+  baseline, then Fatigued at 20%. Keeps 5 min of history; Reset clears it.
+  View: `FatiguePanel` in the sidebar (SVG trend, since the data only updates at 1 Hz).
+- Simulator: muscle signal is Gaussian noise shaped by two cascaded band-pass biquads
+  (normalized to unit variance); sensor noise stays white. The band center falls from
+  90 Hz toward 50 Hz as exercise reps accumulate (biceps most, others less). Measured
+  median frequency is about 104 Hz fresh. It reaches Tiring at ~40 s and Fatigued at
+  ~70 s. `resetFatigue()` is called on Reset.
 
 ## Roadmap
 ### Day 2

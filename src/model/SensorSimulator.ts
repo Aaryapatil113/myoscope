@@ -6,6 +6,13 @@ const MAX_AMPLITUDE_MV = 1.0; // RMS amplitude at full contraction
 const BASELINE_NOISE_MV = 0.012;
 const HUM_MV = 0.006; // 60 Hz powerline interference
 
+// Muscle signal is band-limited noise. Its centre frequency falls as the muscle
+// fatigues, which is what the median-frequency fatigue indicator picks up.
+const EMG_CENTER_FRESH_HZ = 90;
+const EMG_CENTER_FATIGUED_HZ = 50;
+const EMG_Q = 0.7; // broad band, like real surface EMG
+const FATIGUE_REPS = 30; // reps to reach ~63% of the full shift (about 90 s of curls)
+
 export const CHANNELS: ChannelConfig[] = [
   { id: 1, muscle: 'Biceps brachii', side: 'Right', color: '#C2304B' },
   { id: 2, muscle: 'Triceps brachii', side: 'Right', color: '#1F6FB2' },
@@ -28,6 +35,9 @@ const CURL_PROFILES: Record<number, (phase: number) => number> = {
   4: (p) => 0.04 + hump(p, 0.05, 0.5, 0.2), // shoulder assist
 };
 
+/** How strongly each muscle fatigues. The biceps does most of the work in a curl. */
+const FATIGUE_SENSITIVITY: Record<number, number> = { 1: 1, 2: 0.3, 3: 0.6, 4: 0.4 };
+
 /** Deterministic per-rep variation so no two reps look identical. */
 function repVariation(rep: number, channel: number): number {
   const s = Math.sin(rep * 12.9898 + channel * 78.233) * 43758.5453;
@@ -42,6 +52,45 @@ function gaussian(): number {
 }
 
 /**
+ * Gaussian noise shaped by two cascaded band-pass resonators (RBJ biquads) so its
+ * spectrum rises, peaks and rolls off like real EMG instead of being flat white noise.
+ * Output is scaled to unit variance so amplitude doesn't change when the centre moves.
+ */
+class ColoredNoise {
+  private b0 = 0;
+  private a1 = 0;
+  private a2 = 0;
+  private gain = 1;
+  // Delay lines for both stages: [x1, x2, y1, y2]
+  private stages = [new Float64Array(4), new Float64Array(4)];
+
+  setCenter(hz: number): void {
+    const w0 = (2 * Math.PI * hz) / SAMPLE_RATE;
+    const alpha = Math.sin(w0) / (2 * EMG_Q);
+    const a0 = 1 + alpha;
+    this.b0 = alpha / a0;
+    this.a1 = (-2 * Math.cos(w0)) / a0;
+    this.a2 = (1 - alpha) / a0;
+    // Two unity-peak band-pass stages pass about π·f/(2·Q·fs) of white noise's variance
+    this.gain = 1 / Math.sqrt((Math.PI * hz) / (2 * EMG_Q * SAMPLE_RATE));
+  }
+
+  next(): number {
+    let x = gaussian();
+    for (const z of this.stages) {
+      // b1 = 0 and b2 = -b0 for a band-pass
+      const y = this.b0 * (x - z[1]) - this.a1 * z[2] - this.a2 * z[3];
+      z[1] = z[0];
+      z[0] = x;
+      z[3] = z[2];
+      z[2] = y;
+      x = y;
+    }
+    return x * this.gain;
+  }
+}
+
+/**
  * Stands in for a set of wireless body-worn EMG sensors.
  * Swap this class for a real device driver later and nothing
  * above the Model layer needs to change.
@@ -51,16 +100,31 @@ export class SensorSimulator {
   private sampleIndex = 0;
   private battery: number[];
   private extraNoise: number[];
+  private muscleNoise: ColoredNoise[];
+  private repsDone = 0; // fractional reps of exercise, drives fatigue
 
   constructor(private readonly channels: ChannelConfig[]) {
     this.battery = [92, 87, 78, 64].slice(0, channels.length);
     // Channel 4 has a slightly loose electrode, so it reads noisier
     this.extraNoise = channels.map((c) => (c.id === 4 ? 0.035 : 0));
+    this.muscleNoise = channels.map(() => new ColoredNoise());
+  }
+
+  /** A fresh subject: undo all accumulated fatigue. */
+  resetFatigue(): void {
+    this.repsDone = 0;
   }
 
   /** Produce the next n samples for every channel (one Float32Array per channel). */
   generate(n: number): Float32Array[] {
     const out = this.channels.map(() => new Float32Array(n));
+    // Fatigue changes slowly, so updating the filters once per block is plenty
+    const fatigue = 1 - Math.exp(-this.repsDone / FATIGUE_REPS);
+    this.channels.forEach((ch, c) => {
+      const shift = (EMG_CENTER_FRESH_HZ - EMG_CENTER_FATIGUED_HZ) * fatigue * FATIGUE_SENSITIVITY[ch.id];
+      this.muscleNoise[c].setCenter(EMG_CENTER_FRESH_HZ - shift);
+    });
+
     for (let k = 0; k < n; k++) {
       const t = this.sampleIndex / SAMPLE_RATE;
       const phase = (t % REP_SECONDS) / REP_SECONDS;
@@ -69,11 +133,14 @@ export class SensorSimulator {
 
       this.channels.forEach((ch, c) => {
         const activation = this.activation(ch.id, phase, rep);
-        const amplitude = BASELINE_NOISE_MV + this.extraNoise[c] + activation * MAX_AMPLITUDE_MV;
-        out[c][k] = gaussian() * amplitude + hum;
+        // Muscle activity is band-limited; electrode and amplifier noise is white
+        const muscle = this.muscleNoise[c].next() * activation * MAX_AMPLITUDE_MV;
+        const sensorNoise = gaussian() * (BASELINE_NOISE_MV + this.extraNoise[c]);
+        out[c][k] = muscle + sensorNoise + hum;
       });
       this.sampleIndex++;
     }
+    if (this.mode === 'exercise') this.repsDone += n / SAMPLE_RATE / REP_SECONDS;
     // Drain about 1% battery every 40 seconds of streaming
     this.battery = this.battery.map((b) => Math.max(0, b - n / SAMPLE_RATE / 40));
     return out;

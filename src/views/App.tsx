@@ -5,6 +5,7 @@ import { Toolbar } from './Toolbar';
 import { SensorPanel } from './SensorPanel';
 import { ChannelStrip } from './ChannelStrip';
 import { CalibrationBanner } from './CalibrationBanner';
+import { FatiguePanel } from './FatiguePanel';
 
 export function App() {
   // One ViewModel instance for the lifetime of the app
@@ -20,7 +21,10 @@ export function App() {
       <Toolbar state={state} vm={vm} />
       <CalibrationBanner calibration={state.calibration} />
       <div className="workspace">
-        <SensorPanel state={state} onToggle={vm.toggleChannel} />
+        <div className="sidebar">
+          <SensorPanel state={state} onToggle={vm.toggleChannel} />
+          <FatiguePanel fatigue={state.fatigue} isStreaming={state.isStreaming} />
+        </div>
         <main className="traces" aria-label="Live muscle activity">
           {visibleChannels.length === 0 && (
             <p className="empty">All sensors are hidden. Turn one on in the sensor list to see its trace.</p>

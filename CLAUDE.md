@@ -30,7 +30,7 @@ canvas for performance. Plain CSS in `src/index.css` with tokens in `:root`.
   Canvas reads ViewModel buffers directly via `getTrace()` on requestAnimationFrame.
   Snapshot publishing stays throttled (currently 10×/s).
 
-## Current state (Day 1 complete, Day 2 item 1 done)
+## Current state (Day 1 complete, Day 2 items 1–2 done)
 - 4 simulated EMG channels at 2,000 Hz performing bicep curls
 - Moving RMS envelope (100 ms window), live scrolling traces with min/max decimation
 - Calibration flow (relax → max contraction → normalize to % of max)
@@ -47,6 +47,16 @@ canvas for performance. Plain CSS in `src/index.css` with tokens in `:root`.
   90 Hz toward 50 Hz as exercise reps accumulate (biceps most, others less). Measured
   median frequency is about 104 Hz fresh. It reaches Tiring at ~40 s and Fatigued at
   ~70 s. `resetFatigue()` is called on Reset.
+- Bandpass filter: `src/model/Filter.ts` has an RBJ `Biquad` (Direct Form II Transposed),
+  `butterworthQs(order)` and `BandpassFilter` (4th-order Butterworth high-pass at 20 Hz
+  then low-pass at 450 Hz; −3 dB exactly at both edges). Each channel keeps two signal
+  paths (raw and filtered), each with its own trace, envelope, peak and calibration.
+  The toolbar checkbox (`toggleFilter`, on by default) only switches which path is
+  displayed. Rep counting and CSV export always use the filtered path; fatigue uses the
+  raw trace (its analyzer band-limits to 20–450 Hz anyway). `getTrace` returns `{ signal, envelope }`.
+- Simulator adds artifacts for the filter to remove: per-electrode DC offset plus motion
+  artifact (follows the curl, with 3 Hz cable sway) during exercise only. Sensor 4's loose
+  electrode moves most: with the filter off its peak reads ~0.97 mV vs ~0.31 mV filtered.
 
 ## Roadmap
 ### Day 2

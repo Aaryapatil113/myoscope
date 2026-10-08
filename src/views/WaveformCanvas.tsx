@@ -14,7 +14,7 @@ interface Props {
 const Y_RANGE_MV = 2.5; // ±2.5 mV visible
 
 /**
- * Draws raw EMG plus its RMS envelope on a canvas.
+ * Draws the EMG signal (raw or filtered) plus its RMS envelope on a canvas.
  * Runs on requestAnimationFrame and reads the ViewModel's buffers
  * directly, so 8,000 samples/second never pass through React state.
  * Uses min/max decimation: one vertical line per pixel column.
@@ -40,9 +40,9 @@ export function WaveformCanvas({ vm, channelId, color, windowSeconds, mvcMv, lab
       ctx.clearRect(0, 0, w, h);
       drawGrid(ctx, w, h, windowSeconds);
 
-      const { raw, envelope } = vm.getTrace(channelId);
+      const { signal, envelope } = vm.getTrace(channelId);
       const windowSamples = windowSeconds * SAMPLE_RATE;
-      const total = Math.min(raw.length, windowSamples);
+      const total = Math.min(signal.length, windowSamples);
       const mid = h / 2;
       const scale = (h / 2 - 4) / Y_RANGE_MV;
       const samplesPerPx = windowSamples / w;
@@ -60,22 +60,22 @@ export function WaveformCanvas({ vm, channelId, color, windowSeconds, mvcMv, lab
       }
 
       if (total > 1) {
-        const start = raw.length - total;
+        const start = signal.length - total;
         const xOffset = w - total / samplesPerPx; // newest sample sits on the right edge
         const columns = Math.floor(total / samplesPerPx);
 
-        // Raw signal: min/max per pixel column
+        // Signal: min/max per pixel column
         ctx.strokeStyle = color;
         ctx.globalAlpha = 0.32;
         ctx.lineWidth = 1;
         ctx.beginPath();
         for (let px = 0; px < columns; px++) {
           const from = start + Math.floor(px * samplesPerPx);
-          const to = Math.min(start + Math.floor((px + 1) * samplesPerPx), raw.length);
+          const to = Math.min(start + Math.floor((px + 1) * samplesPerPx), signal.length);
           let min = Infinity;
           let max = -Infinity;
           for (let i = from; i < to; i++) {
-            const v = raw.at(i);
+            const v = signal.at(i);
             if (v < min) min = v;
             if (v > max) max = v;
           }

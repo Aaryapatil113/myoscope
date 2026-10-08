@@ -46,6 +46,11 @@ export function Toolbar({ state, vm }: Props) {
       </dl>
 
       <div className="controls">
+        <label className="filter-toggle"
+          title="Removes electrode offset, motion artifact and high-frequency noise. Turn off to see the raw signal.">
+          <input type="checkbox" checked={state.filter.enabled} onChange={vm.toggleFilter} />
+          Filter {state.filter.lowHz}–{state.filter.highHz} Hz
+        </label>
         <label className="window-select">
           Time window
           <select value={state.windowSeconds} onChange={(e) => vm.setWindowSeconds(Number(e.target.value))}>

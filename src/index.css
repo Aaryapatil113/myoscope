@@ -47,6 +47,8 @@ button, select, input { font: inherit; color: inherit; }
 .session-stats dd.muted { color: var(--muted); font-size: 15px; padding-top: 4px; }
 
 .controls { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.filter-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.filter-toggle input { margin: 0; accent-color: var(--ink); }
 .window-select { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-right: 8px; }
 .window-select select {
   border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6px 8px; background: var(--surface);

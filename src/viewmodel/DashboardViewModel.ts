@@ -2,6 +2,7 @@ import { ObservableObject } from './ObservableObject';
 import { CHANNELS, SAMPLE_RATE, SensorSimulator } from '../model/SensorSimulator';
 import { RingBuffer } from '../model/RingBuffer';
 import { RmsEnvelope } from '../model/RmsEnvelope';
+import { BandpassFilter } from '../model/Filter';
 import { MedianFrequencyAnalyzer } from '../model/Spectrum';
 import type { ChannelConfig, SensorStatus } from '../model/types';
 
@@ -15,6 +16,8 @@ const CONTRACT_SECONDS = 3;
 const COMPLETE_SECONDS = 2;
 const EXPORT_DECIMATION = 20; // 2000 Hz → 100 Hz in the CSV
 const MAX_EXPORT_ROWS = 100 * 60 * 30; // 30 minutes
+const FILTER_LOW_HZ = 20; // below this: electrode offset and motion artifact
+const FILTER_HIGH_HZ = 450; // above this: amplifier noise, little muscle content
 const FATIGUE_CHANNEL = 0; // biceps, the prime mover in a curl
 const FATIGUE_WINDOW_SAMPLES = SAMPLE_RATE; // analyze the latest 1 s of raw signal…
 const FATIGUE_INTERVAL_SAMPLES = SAMPLE_RATE; // …once per second, not every sample
@@ -56,10 +59,12 @@ export interface DashboardState {
   hasData: boolean;
   channels: ChannelViewState[];
   fatigue: FatigueState;
+  filter: { enabled: boolean; lowHz: number; highHz: number };
 }
 
-interface ChannelPipeline {
-  raw: RingBuffer;
+/** One version of a channel's signal (raw or filtered) and everything derived from it. */
+interface SignalPath {
+  trace: RingBuffer;
   envelope: RingBuffer;
   rms: RmsEnvelope;
   current: number;
@@ -68,17 +73,45 @@ interface ChannelPipeline {
   mvc: number | null;
 }
 
-export class DashboardViewModel extends ObservableObject<DashboardState> {
-  private simulator = new SensorSimulator(CHANNELS);
-  private pipelines: ChannelPipeline[] = CHANNELS.map(() => ({
-    raw: new RingBuffer(MAX_WINDOW_SECONDS * SAMPLE_RATE),
+/**
+ * Both paths are always computed, so the filter toggle switches the display
+ * instantly (including the history on screen) and each keeps its own calibration.
+ */
+interface ChannelPipeline {
+  filter: BandpassFilter;
+  raw: SignalPath;
+  filtered: SignalPath;
+}
+
+function createPath(): SignalPath {
+  return {
+    trace: new RingBuffer(MAX_WINDOW_SECONDS * SAMPLE_RATE),
     envelope: new RingBuffer(MAX_WINDOW_SECONDS * SAMPLE_RATE),
     rms: new RmsEnvelope(RMS_WINDOW_SAMPLES),
     current: 0,
     peak: 0,
     calibrationPeak: 0,
     mvc: null,
+  };
+}
+
+function clearPath(path: SignalPath): void {
+  path.trace.clear();
+  path.envelope.clear();
+  path.rms.reset();
+  path.current = 0;
+  path.peak = 0;
+  path.mvc = null;
+}
+
+export class DashboardViewModel extends ObservableObject<DashboardState> {
+  private simulator = new SensorSimulator(CHANNELS);
+  private pipelines: ChannelPipeline[] = CHANNELS.map(() => ({
+    filter: new BandpassFilter(FILTER_LOW_HZ, FILTER_HIGH_HZ, SAMPLE_RATE),
+    raw: createPath(),
+    filtered: createPath(),
   }));
+  private filterEnabled = true;
   private hidden = new Set<number>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private tickCount = 0;
@@ -118,12 +151,9 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
   reset = (): void => {
     this.stop();
     this.pipelines.forEach((p) => {
-      p.raw.clear();
-      p.envelope.clear();
-      p.rms.reset();
-      p.current = 0;
-      p.peak = 0;
-      p.mvc = null;
+      p.filter.reset();
+      clearPath(p.raw);
+      clearPath(p.filtered);
     });
     this.sessionSamples = 0;
     this.repCount = 0;
@@ -137,7 +167,10 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
   };
 
   calibrate = (): void => {
-    this.pipelines.forEach((p) => (p.calibrationPeak = 0));
+    this.pipelines.forEach((p) => {
+      p.raw.calibrationPeak = 0;
+      p.filtered.calibrationPeak = 0;
+    });
     this.calibration = { phase: 'relax', samplesLeft: RELAX_SECONDS * SAMPLE_RATE };
     this.simulator.mode = 'rest';
     if (this.timer === null) this.start();
@@ -150,12 +183,21 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
     this.emit();
   };
 
+  /** Switches what the user sees. Rep counting and export always use the filtered signal. */
+  toggleFilter = (): void => {
+    this.filterEnabled = !this.filterEnabled;
+    this.emit();
+  };
+
   setWindowSeconds = (seconds: number): void => {
     this.windowSeconds = Math.min(Math.max(seconds, 1), MAX_WINDOW_SECONDS);
     this.emit();
   };
 
-  /** Returns CSV text. The View decides how to save it (platform concern). */
+  /**
+   * Returns CSV text. The View decides how to save it (platform concern).
+   * Always the filtered envelope, so toggling mid-session never mixes signals in one file.
+   */
   exportCsv = (): string | null => {
     if (this.recording.length === 0) return null;
     const header = ['time_s', ...CHANNELS.map((c) => `${c.muscle.replace(/\s+/g, '_')}_rms_mV`)];
@@ -163,10 +205,13 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
     return [header, ...rows].map((r) => r.join(',')).join('\n');
   };
 
-  /** Raw access for high-frequency drawing. Canvas reads this every frame, bypassing React. */
-  getTrace = (channelId: number): { raw: RingBuffer; envelope: RingBuffer } => {
-    const p = this.pipelines[CHANNELS.findIndex((c) => c.id === channelId)];
-    return { raw: p.raw, envelope: p.envelope };
+  /**
+   * Direct buffer access for high-frequency drawing. Canvas reads this every frame,
+   * bypassing React. Returns the raw or filtered signal depending on the toggle.
+   */
+  getTrace = (channelId: number): { signal: RingBuffer; envelope: RingBuffer } => {
+    const path = this.displayed(this.pipelines[CHANNELS.findIndex((c) => c.id === channelId)]);
+    return { signal: path.trace, envelope: path.envelope };
   };
 
   dispose = (): void => this.stop();
@@ -183,13 +228,8 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
       for (let c = 0; c < CHANNELS.length; c++) {
         const p = this.pipelines[c];
         const sample = blocks[c][k];
-        const env = p.rms.next(sample);
-        p.raw.push(sample);
-        p.envelope.push(env);
-        p.current = env;
-        lastEnvelope[c] = env;
-        if (this.calibration.phase === 'contract') p.calibrationPeak = Math.max(p.calibrationPeak, env);
-        else if (tracking) p.peak = Math.max(p.peak, env);
+        this.process(p.raw, sample, tracking);
+        lastEnvelope[c] = this.process(p.filtered, p.filter.next(sample), tracking);
       }
       if ((this.sessionSamples + k) % EXPORT_DECIMATION === 0 && this.recording.length < MAX_EXPORT_ROWS) {
         this.recording.push([(this.sessionSamples + k) / SAMPLE_RATE, ...lastEnvelope]);
@@ -205,6 +245,21 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
     if (this.tickCount % PUBLISH_EVERY_TICKS === 0) this.emit();
   };
 
+  /** Pushes one sample through a signal path and returns its new envelope value. */
+  private process(path: SignalPath, sample: number, tracking: boolean): number {
+    const env = path.rms.next(sample);
+    path.trace.push(sample);
+    path.envelope.push(env);
+    path.current = env;
+    if (this.calibration.phase === 'contract') path.calibrationPeak = Math.max(path.calibrationPeak, env);
+    else if (tracking) path.peak = Math.max(path.peak, env);
+    return env;
+  }
+
+  private displayed(p: ChannelPipeline): SignalPath {
+    return this.filterEnabled ? p.filtered : p.raw;
+  }
+
   private advanceCalibration(): void {
     const cal = this.calibration;
     if (cal.phase === 'none') return;
@@ -216,8 +271,10 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
       this.simulator.mode = 'maxContraction';
     } else if (cal.phase === 'contract') {
       this.pipelines.forEach((p) => {
-        p.mvc = p.calibrationPeak;
-        p.peak = 0;
+        for (const path of [p.raw, p.filtered]) {
+          path.mvc = path.calibrationPeak;
+          path.peak = 0;
+        }
       });
       this.calibration = { phase: 'complete', samplesLeft: COMPLETE_SECONDS * SAMPLE_RATE };
       this.simulator.mode = 'exercise';
@@ -233,9 +290,13 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
     this.simulator.mode = 'exercise';
   }
 
-  /** Counts reps from the biceps envelope using hysteresis (two thresholds). */
+  /**
+   * Counts reps from the biceps envelope using hysteresis (two thresholds).
+   * Uses the filtered signal regardless of the toggle: motion artifact in the raw
+   * signal keeps the resting level above the re-arm threshold.
+   */
   private detectReps(): void {
-    const biceps = this.pipelines[0];
+    const biceps = this.pipelines[0].filtered;
     const level = biceps.mvc ? biceps.current / biceps.mvc : biceps.current / 0.7;
     if (this.repArmed && level > 0.35) {
       this.repCount++;
@@ -255,7 +316,7 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
     if (this.samplesSinceFatigue < FATIGUE_INTERVAL_SAMPLES) return;
     this.samplesSinceFatigue = 0;
 
-    const raw = this.pipelines[FATIGUE_CHANNEL].raw;
+    const raw = this.pipelines[FATIGUE_CHANNEL].raw.trace;
     if (!tracking || raw.length < FATIGUE_WINDOW_SAMPLES) return;
 
     const offset = raw.length - FATIGUE_WINDOW_SAMPLES;
@@ -292,7 +353,7 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
 
   private emit(): void {
     const channels: ChannelViewState[] = CHANNELS.map((cfg, c) => {
-      const p = this.pipelines[c];
+      const p = this.displayed(this.pipelines[c]);
       return {
         ...cfg,
         visible: !this.hidden.has(cfg.id),
@@ -313,10 +374,11 @@ export class DashboardViewModel extends ObservableObject<DashboardState> {
         phase: this.calibration.phase,
         secondsLeft: Math.ceil(this.calibration.samplesLeft / SAMPLE_RATE),
       },
-      isCalibrated: this.pipelines.every((p) => p.mvc !== null),
+      isCalibrated: this.pipelines.every((p) => p.filtered.mvc !== null),
       hasData: this.sessionSamples > 0,
       channels,
       fatigue: this.fatigueState(),
+      filter: { enabled: this.filterEnabled, lowHz: FILTER_LOW_HZ, highHz: FILTER_HIGH_HZ },
     });
   }
 }

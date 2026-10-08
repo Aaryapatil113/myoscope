@@ -35,6 +35,19 @@ const CURL_PROFILES: Record<number, (phase: number) => number> = {
   4: (p) => 0.04 + hump(p, 0.05, 0.5, 0.2), // shoulder assist
 };
 
+/**
+ * Artifacts a band-pass filter is there to remove. Electrodes sit at a small DC
+ * offset, and when the arm moves, skin and cables shift and add a slow wave
+ * (well under 20 Hz). Sensor 4's loose electrode moves the most.
+ */
+const ELECTRODE: Record<number, { offsetMv: number; motionMv: number }> = {
+  1: { offsetMv: 0.1, motionMv: 0.25 },
+  2: { offsetMv: -0.12, motionMv: 0.15 },
+  3: { offsetMv: 0.08, motionMv: 0.2 },
+  4: { offsetMv: 0.2, motionMv: 0.6 },
+};
+const CABLE_SWAY_HZ = 3.1;
+
 /** How strongly each muscle fatigues. The biceps does most of the work in a curl. */
 const FATIGUE_SENSITIVITY: Record<number, number> = { 1: 1, 2: 0.3, 3: 0.6, 4: 0.4 };
 
@@ -136,7 +149,7 @@ export class SensorSimulator {
         // Muscle activity is band-limited; electrode and amplifier noise is white
         const muscle = this.muscleNoise[c].next() * activation * MAX_AMPLITUDE_MV;
         const sensorNoise = gaussian() * (BASELINE_NOISE_MV + this.extraNoise[c]);
-        out[c][k] = muscle + sensorNoise + hum;
+        out[c][k] = muscle + sensorNoise + hum + this.artifact(ch.id, phase, t);
       });
       this.sampleIndex++;
     }
@@ -150,6 +163,16 @@ export class SensorSimulator {
     const noise = this.extraNoise[channelIndex];
     const quality: SignalQuality = noise > 0.05 ? 'poor' : noise > 0 ? 'fair' : 'good';
     return { battery: Math.round(this.battery[channelIndex]), quality };
+  }
+
+  /** Electrode offset plus motion artifact, which only appears while the arm is moving. */
+  private artifact(channelId: number, phase: number, t: number): number {
+    const { offsetMv, motionMv } = ELECTRODE[channelId];
+    if (this.mode !== 'exercise') return offsetMv;
+    // Follows the elbow angle through the curl, with some cable sway on top
+    const movement = hump(phase, 0, 0.85, 1);
+    const sway = 0.3 * movement * Math.sin(2 * Math.PI * CABLE_SWAY_HZ * t + channelId);
+    return offsetMv + motionMv * (movement + sway);
   }
 
   private activation(channelId: number, phase: number, rep: number): number {

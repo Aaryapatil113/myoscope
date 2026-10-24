@@ -79,6 +79,7 @@ export function WaveformCanvas({ vm, channelId, color, windowSeconds, mvcMv, lab
             if (v < min) min = v;
             if (v > max) max = v;
           }
+          if (min > max) continue; // only NaN in this column: no data while the sensor was offline
           const x = xOffset + px + 0.5;
           ctx.moveTo(x, mid - Math.min(max, Y_RANGE_MV) * scale);
           ctx.lineTo(x, mid - Math.max(min, -Y_RANGE_MV) * scale);
@@ -90,12 +91,19 @@ export function WaveformCanvas({ vm, channelId, color, windowSeconds, mvcMv, lab
         ctx.lineWidth = 2;
         ctx.lineJoin = 'round';
         ctx.beginPath();
+        let penDown = false;
         for (let px = 0; px < columns; px++) {
           const i = Math.min(start + Math.floor((px + 1) * samplesPerPx) - 1, envelope.length - 1);
-          const y = mid - Math.min(envelope.at(i), Y_RANGE_MV) * scale;
+          const value = envelope.at(i);
+          if (Number.isNaN(value)) {
+            penDown = false; // lift the pen across a gap instead of bridging it
+            continue;
+          }
+          const y = mid - Math.min(value, Y_RANGE_MV) * scale;
           const x = xOffset + px + 0.5;
-          if (px === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+          if (penDown) ctx.lineTo(x, y);
+          else ctx.moveTo(x, y);
+          penDown = true;
         }
         ctx.stroke();
       }

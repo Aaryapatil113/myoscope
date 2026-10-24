@@ -30,7 +30,7 @@ canvas for performance. Plain CSS in `src/index.css` with tokens in `:root`.
   Canvas reads ViewModel buffers directly via `getTrace()` on requestAnimationFrame.
   Snapshot publishing stays throttled (currently 10×/s).
 
-## Current state (Day 1 complete, Day 2 items 1–2 done)
+## Current state (Day 1 complete, Day 2 items 1–3 done)
 - 4 simulated EMG channels at 2,000 Hz performing bicep curls
 - Moving RMS envelope (100 ms window), live scrolling traces with min/max decimation
 - Calibration flow (relax → max contraction → normalize to % of max)
@@ -57,6 +57,15 @@ canvas for performance. Plain CSS in `src/index.css` with tokens in `:root`.
 - Simulator adds artifacts for the filter to remove: per-electrode DC offset plus motion
   artifact (follows the curl, with 3 Hz cable sway) during exercise only. Sensor 4's loose
   electrode moves most: with the filter off its peak reads ~0.97 mV vs ~0.31 mV filtered.
+- Sensor events: sensor 4 drops its wireless link for 4 s, first at 15 s of streaming,
+  then every 45 s (only starts in exercise mode, so calibration is never interrupted).
+  `generate()` returns `null` for a disconnected channel, like missing packets. The
+  ViewModel pushes NaN into its buffers so channels stay time-aligned and the canvas
+  draws a gap (NaN columns skipped, envelope line lifted). Filter and RMS state reset on
+  reconnect. `ChannelViewState.connection` is 'connected' | 'reconnecting' |
+  'reconnected' (the last shows for 2 s). View: strip greys out with "Signal lost.
+  Reconnecting…", sensor list shows a "Reconnecting…" label, and lost samples export as
+  blank CSV cells.
 
 ## Roadmap
 ### Day 2

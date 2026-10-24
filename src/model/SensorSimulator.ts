@@ -13,6 +13,13 @@ const EMG_CENTER_FATIGUED_HZ = 50;
 const EMG_Q = 0.7; // broad band, like real surface EMG
 const FATIGUE_REPS = 30; // reps to reach ~63% of the full shift (about 90 s of curls)
 
+// Wireless dropouts: sensor 4 (weakest battery, loose electrode) loses its link on a
+// fixed schedule so the reconnect UI can be demoed predictably.
+const DROPOUT_SENSOR_ID = 4;
+const FIRST_DROPOUT_SECONDS = 15;
+const DROPOUT_EVERY_SECONDS = 45;
+const DROPOUT_SECONDS = 4;
+
 export const CHANNELS: ChannelConfig[] = [
   { id: 1, muscle: 'Biceps brachii', side: 'Right', color: '#C2304B' },
   { id: 2, muscle: 'Triceps brachii', side: 'Right', color: '#1F6FB2' },
@@ -111,6 +118,8 @@ class ColoredNoise {
 export class SensorSimulator {
   mode: SubjectMode = 'exercise';
   private sampleIndex = 0;
+  private nextDropoutAt = FIRST_DROPOUT_SECONDS * SAMPLE_RATE; // in samples
+  private dropoutEndsAt = 0;
   private battery: number[];
   private extraNoise: number[];
   private muscleNoise: ColoredNoise[];
@@ -128,8 +137,14 @@ export class SensorSimulator {
     this.repsDone = 0;
   }
 
-  /** Produce the next n samples for every channel (one Float32Array per channel). */
-  generate(n: number): Float32Array[] {
+  /**
+   * Produce the next n samples for every channel (one Float32Array per channel).
+   * A disconnected sensor delivers nothing, so its entry is null, just like
+   * missing packets from real wireless hardware.
+   */
+  generate(n: number): (Float32Array | null)[] {
+    this.scheduleDropout();
+    const linked = this.channels.map((ch) => !this.isDroppedOut(ch.id));
     const out = this.channels.map(() => new Float32Array(n));
     // Fatigue changes slowly, so updating the filters once per block is plenty
     const fatigue = 1 - Math.exp(-this.repsDone / FATIGUE_REPS);
@@ -156,7 +171,20 @@ export class SensorSimulator {
     if (this.mode === 'exercise') this.repsDone += n / SAMPLE_RATE / REP_SECONDS;
     // Drain about 1% battery every 40 seconds of streaming
     this.battery = this.battery.map((b) => Math.max(0, b - n / SAMPLE_RATE / 40));
-    return out;
+    // The body keeps moving while a sensor is offline; only delivery stops
+    return out.map((block, c) => (linked[c] ? block : null));
+  }
+
+  /** Starts the next dropout when it's due. Waits for exercise so calibration is never interrupted. */
+  private scheduleDropout(): void {
+    if (this.sampleIndex < this.nextDropoutAt || this.mode !== 'exercise') return;
+    if (!this.channels.some((ch) => ch.id === DROPOUT_SENSOR_ID)) return;
+    this.dropoutEndsAt = this.sampleIndex + DROPOUT_SECONDS * SAMPLE_RATE;
+    this.nextDropoutAt = this.sampleIndex + DROPOUT_EVERY_SECONDS * SAMPLE_RATE;
+  }
+
+  private isDroppedOut(channelId: number): boolean {
+    return channelId === DROPOUT_SENSOR_ID && this.sampleIndex < this.dropoutEndsAt;
   }
 
   status(channelIndex: number): SensorStatus {

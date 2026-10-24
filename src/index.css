@@ -115,6 +115,7 @@ button, select, input { font: inherit; color: inherit; }
 .quality.good { background: #e5f4ef; color: var(--ok); }
 .quality.fair { background: #fff3dc; color: var(--warn); }
 .quality.poor { background: #fde8ec; color: var(--danger); }
+.quality.reconnecting { background: #fff3dc; color: var(--warn); }
 .battery {
   margin-left: auto; width: 28px; height: 11px; border: 1.5px solid var(--muted); border-radius: 2px;
   padding: 1px; position: relative;
@@ -177,6 +178,21 @@ button, select, input { font: inherit; color: inherit; }
   color: var(--muted); font-size: 14px; pointer-events: none;
 }
 
+/* Sensor offline: grey out the stale trace and readout, keep the status in colour */
+.strip { transition: border-color 150ms ease; }
+.strip .trace, .strip .readout { transition: opacity 150ms ease, filter 150ms ease; }
+.strip.reconnecting { border-left-color: var(--line); }
+.strip.reconnecting .trace, .strip.reconnecting .readout { filter: grayscale(1); opacity: 0.45; }
+.trace-status {
+  position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+  font-size: 14px; font-weight: 500; color: var(--warn);
+}
+.trace-status:empty { display: none; }
+.strip.reconnected .trace-status {
+  inset: 8px 8px auto auto; padding: 1px 8px; border-radius: var(--radius-sm);
+  font-size: 12px; background: #e5f4ef; color: var(--ok);
+}
+
 .readout { display: grid; grid-template-columns: 1fr 10px; grid-template-rows: auto 1fr; column-gap: 12px; }
 .readout-value { font-size: 34px; font-weight: 500; line-height: 1.1; color: var(--channel); }
 .readout-value span { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 4px; }
@@ -201,5 +217,5 @@ button, select, input { font: inherit; color: inherit; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .meter-fill { transition: none; }
+  .meter-fill, .strip, .strip .trace, .strip .readout { transition: none; }
 }

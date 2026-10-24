@@ -23,9 +23,13 @@ export function SensorPanel({ state, onToggle }: Props) {
               </span>
             </label>
             <div className="sensor-meta">
-              <span className={`quality ${ch.status.quality}`} title={QUALITY_LABEL[ch.status.quality]}>
-                {ch.status.quality === 'good' ? 'Good' : ch.status.quality === 'fair' ? 'Fair' : 'Poor'}
-              </span>
+              {ch.connection === 'reconnecting' ? (
+                <span className="quality reconnecting" title="Wireless link lost. Trying to reconnect.">Reconnecting…</span>
+              ) : (
+                <span className={`quality ${ch.status.quality}`} title={QUALITY_LABEL[ch.status.quality]}>
+                  {ch.status.quality === 'good' ? 'Good' : ch.status.quality === 'fair' ? 'Fair' : 'Poor'}
+                </span>
+              )}
               <span className={`battery ${ch.status.battery < 20 ? 'low' : ''}`}
                 aria-label={`Battery ${ch.status.battery} percent`}>
                 <span className="battery-fill" style={{ width: `${ch.status.battery}%` }} />
@@ -35,7 +39,14 @@ export function SensorPanel({ state, onToggle }: Props) {
           </li>
         ))}
       </ul>
-      <p className="sensor-state">{state.isStreaming ? 'Streaming at 2,000 Hz' : 'Sensors paired, not streaming'}</p>
+      <p className="sensor-state">{sensorState(state)}</p>
     </aside>
   );
+}
+
+function sensorState(state: DashboardState): string {
+  if (!state.isStreaming) return 'Sensors paired, not streaming';
+  const offline = state.channels.filter((ch) => ch.connection === 'reconnecting').length;
+  if (offline === 0) return 'Streaming at 2,000 Hz';
+  return `Streaming at 2,000 Hz. ${offline} sensor${offline > 1 ? 's' : ''} reconnecting`;
 }

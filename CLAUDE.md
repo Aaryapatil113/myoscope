@@ -30,7 +30,7 @@ canvas for performance. Plain CSS in `src/index.css` with tokens in `:root`.
   Canvas reads ViewModel buffers directly via `getTrace()` on requestAnimationFrame.
   Snapshot publishing stays throttled (currently 10×/s).
 
-## Current state (Day 1 complete, Day 2 items 1–3 done)
+## Current state (Day 1 complete, Day 2 items 1–3 done, Day 3 item 4 done)
 - 4 simulated EMG channels at 2,000 Hz performing bicep curls
 - Moving RMS envelope (100 ms window), live scrolling traces with min/max decimation
 - Calibration flow (relax → max contraction → normalize to % of max)
@@ -66,6 +66,9 @@ canvas for performance. Plain CSS in `src/index.css` with tokens in `:root`.
   'reconnected' (the last shows for 2 s). View: strip greys out with "Signal lost.
   Reconnecting…", sensor list shows a "Reconnecting…" label, and lost samples export as
   blank CSV cells.
+- Deployment: `.github/workflows/deploy.yml` builds and publishes `dist/` to GitHub Pages
+  on every push to `main` (Pages source must be set to "GitHub Actions" in repo settings).
+  Live at https://aaryapatil113.github.io/myoscope/. README has the live link and current features.
 
 ## Roadmap
 ### Day 2
